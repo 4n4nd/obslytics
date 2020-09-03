@@ -4,18 +4,66 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/prometheus/common/model"
-
-	//"github.com/prometheus/client_golang/prometheus"
+	"github.com/go-kit/kit/log"
 	config_util "github.com/prometheus/common/config"
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
-	//"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage/remote"
+	"github.com/thanos-community/obslytics/pkg/input"
+	"github.com/thanos-io/thanos/pkg/store/storepb"
+	"google.golang.org/grpc"
 
 	"net/url"
 
 	"time"
 )
+
+type remoteReadInput struct {
+	logger log.Logger
+	conf   input.InputConfig
+}
+
+func NewStoreAPIInput(logger log.Logger, conf input.InputConfig) (remoteReadInput, error) {
+	return remoteReadInput{logger: logger, conf: conf}, nil
+}
+
+//func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (input.SeriesIterator, error) {
+//
+//
+//	tlsConfig := config_util.TLSConfig{
+//		CAFile:             i.conf.TLSConfig.CAFile,
+//		CertFile:           i.conf.TLSConfig.CertFile,
+//		KeyFile:            i.conf.TLSConfig.KeyFile,
+//		ServerName:         i.conf.TLSConfig.ServerName,
+//		InsecureSkipVerify: i.conf.TLSConfig.InsecureSkipVerify,
+//	}
+//
+//	httpConfig := config_util.HTTPClientConfig{
+//		//BasicAuth:       nil,
+//		//BearerToken:     "",
+//		//BearerTokenFile: "",
+//		//ProxyURL:        config_util.URL{},
+//		TLSConfig:       tlsConfig,
+//	}
+//
+//	clientConfig := remote.ClientConfig{
+//		URL:              nil,
+//		Timeout:          0,
+//		HTTPClientConfig: config_util.HTTPClientConfig{},
+//	}
+//
+//	//client, err := remote.NewReadClient("name", clientConfig)
+//	return nil, nil
+//}
+
+// readSeriesIterator implements input.SeriesIterator
+type readSeriesIterator struct {
+	logger        log.Logger
+	ctx           context.Context
+	conn          *grpc.ClientConn
+	client        remote.ReadClient
+	currentSeries *storepb.Series
+}
 
 var userAgent = fmt.Sprintf("Obslytics/%s", 0.1)
 
@@ -60,16 +108,17 @@ func main() {
 			&myQuery,
 		},
 	}
-	print(req.String())
+	println(req.String())
 
 	if err != nil {
 		print("error")
 	}
 
 	readResponse, err := myReadClient.Read(ctx, &myQuery)
+	println(readResponse.Timeseries)
 	if err != nil {
 		print("error: ", err.Error())
 	} else {
-		println("Query Response: ", readResponse.String())
+		//println("Query Response: ", readResponse.String())
 	}
 }
