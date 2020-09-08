@@ -5,21 +5,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/go-kit/kit/log"
-	"github.com/pkg/errors"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	"github.com/thanos-community/obslytics/pkg/input"
-	"github.com/thanos-io/thanos/pkg/extgrpc"
-	"github.com/thanos-io/thanos/pkg/store/storepb"
-	tracing "github.com/thanos-io/thanos/pkg/tracing/client"
-	"google.golang.org/grpc"
-	"io"
-
+	http_util "github.com/thanos-io/thanos/pkg/http"
 	"net/url"
 
 	"time"
@@ -36,25 +29,6 @@ func NewRemoteReadInput(logger log.Logger, conf input.InputConfig) (remoteReadIn
 
 func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (input.SeriesIterator, error) {
 
-	//dialOpts, err := extgrpc.StoreClientGRPCOpts(i.logger, nil, tracing.NoopTracer(),
-	//	!i.conf.TLSConfig.InsecureSkipVerify,
-	//	i.conf.TLSConfig.CertFile,
-	//	i.conf.TLSConfig.KeyFile,
-	//	i.conf.TLSConfig.CAFile,
-	//	i.conf.Endpoint)
-	//
-	//if err != nil {
-	//	return nil, errors.Wrap(err, "Error initializing GRPC options")
-	//}
-	//
-	//conn, err := grpc.DialContext(ctx, i.conf.Endpoint, dialOpts...)
-	//if err != nil {
-	//	return nil, errors.Wrap(err, "Error initializing GRPC dial context")
-	//}
-
-	//client := storepb.NewStoreClient(conn)
-
-	myUrl := i.conf.Endpoint
 	tlsConfig := config_util.TLSConfig{
 		CAFile:             i.conf.TLSConfig.CAFile,
 		CertFile:           i.conf.TLSConfig.CertFile,
@@ -75,12 +49,14 @@ func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (i
 	if err != nil {
 		return nil, err
 	}
-
+	timeoutDuration, err := model.ParseDuration("10s")
+	if err != nil {
+		return nil, err
+	}
 	endpointUrl := &config_util.URL{URL: parsedUrl}
-
 	clientConfig := &remote.ClientConfig{
 		URL:              endpointUrl,
-		Timeout:          0,
+		Timeout:          timeoutDuration,
 		HTTPClientConfig: httpConfig,
 	}
 
@@ -89,53 +65,50 @@ func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (i
 		return nil, err
 	}
 
-	readResponse, err := client.Read(ctx, nil)
+	queryLabel := &prompb.LabelMatcher{
+		Type:  0,
+		Name:  "__name__",
+		Value: params.Metric,
+	}
+	var queryLabelList = make([]*prompb.LabelMatcher, 1)
+	queryLabelList[0] = queryLabel
 
-	//readResponse.Get
-	//timeseries := readResponse.GetTimeseries()
-	//timeseries[0].GetSamples()[0].XXX_Marshal()
-	//samples := timeseries[0].Samples[0].
-	//ser := storepb.Series{
-	//	Labels: readResponse.Timeseries[0].Labels,
-	//	Chunks: nil,
-	//}
+	params.MinTime.Unix()
+	query := &prompb.Query{
+		StartTimestampMs: params.MinTime.Unix() * 1000,
+		EndTimestampMs:   params.MaxTime.Unix() * 1000,
+		Matchers:         queryLabelList,
+	}
 
-	//prompb.Chunk{
-	//	MinTimeMs:            0,
-	//	MaxTimeMs:            0,
-	//	Type:                 0,
-	//	Data:                 nil,
-	//	XXX_NoUnkeyedLiteral: struct{}{},
-	//	XXX_unrecognized:     nil,
-	//	XXX_sizecache:        0,
-	//}
-	//storepb.Chunk{
-	//	Type: 0,
-	//	Data: nil,
-	//}
-	//storepb.AggrChunk{
-	//	MinTime: 0,
-	//	MaxTime: 0,
-	//	Raw:     nil,
-	//	Count:   nil,
-	//	Sum:     nil,
-	//	Min:     nil,
-	//	Max:     nil,
-	//	Counter: nil,
-	//}
-	//seriesClient, err := client.Series(ctx, &storepb.SeriesRequest{
-	//	MinTime: timestamp.FromTime(params.MinTime),
-	//	MaxTime: timestamp.FromTime(params.MaxTime),
-	//	Matchers: []storepb.LabelMatcher{
-	//		{Type: storepb.LabelMatcher_EQ, Name: "__name__", Value: params.Metric},
-	//	},
-	//	PartialResponseStrategy: storepb.PartialResponseStrategy_ABORT,
-	//})
+	println("query: ", query.String())
+	readResponse, err := client.Read(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	println("len: ", len(readResponse.Timeseries))
+	println(readResponse.Timeseries[0].Labels[1].Value)
+
+	var readSeriesList = make([]ReadSeries, 0, len(readResponse.Timeseries))
+
+	//var readSeriesList = []ReadSeries
+	// Convert Timeseries List to a Read Series List
+	for index := range readResponse.Timeseries {
+		println("index: ", index)
+		readSeriesList = append(readSeriesList, ReadSeries{
+			timeseries: *readResponse.Timeseries[index],
+		})
+		println(readSeriesList[index].timeseries.Labels[2].Value)
+
+	}
 
 	return &readSeriesIterator{
-		logger: i.logger,
-		ctx:    ctx,
-		client: client}, nil
+		logger:             i.logger,
+		ctx:                ctx,
+		client:             client,
+		seriesList:         readSeriesList,
+		currentSeriesIndex: 0,
+		maxSeriesIndex:     len(readSeriesList) - 1,
+	}, nil
 }
 
 // readSeriesIterator implements input.SeriesIterator
@@ -160,6 +133,7 @@ func (i *readSeriesIterator) Next() bool {
 }
 
 func (i *readSeriesIterator) At() input.Series {
+	println("index: ", i.maxSeriesIndex)
 	return i.seriesList[i.currentSeriesIndex]
 }
 
@@ -177,10 +151,10 @@ func (r ReadSeries) Labels() labels.Labels {
 
 	var labelList []labels.Label
 	for i := range r.timeseries.Labels {
-		labelList[i] = labels.Label{
+		labelList = append(labelList, labels.Label{
 			Name:  r.timeseries.Labels[i].Name,
 			Value: r.timeseries.Labels[i].Value,
-		}
+		})
 
 	}
 	return labels.New(labelList...)
@@ -257,57 +231,30 @@ func (c ReadChunk) Iterator() ReadChunkIterator {
 var userAgent = fmt.Sprintf("Obslytics/%s", 0.1)
 
 func main() {
-	//myClient := http.Client{}
-	myUrl := &url.URL{
-		Scheme: "http",
-		Host:   "localhost:9090",
-		Path:   "api/v1/read",
+	in := input.InputConfig{
+		Endpoint:  "http://localhost:9090/api/v1/read",
+		TLSConfig: http_util.TLSConfig{},
 	}
 
-	myClientConfig := &remote.ClientConfig{
-		URL:              &config_util.URL{URL: myUrl},
-		Timeout:          model.Duration(10 * time.Second),
-		HTTPClientConfig: config_util.HTTPClientConfig{},
+	minTime := time.Unix(time.Now().Unix()-1000*int64(time.Minute.Minutes()), 0)
+	//tenMinutes.Seconds()
+	serParams := input.SeriesParams{
+		Metric:  "go_gc_duration_seconds",
+		MinTime: minTime,
+		MaxTime: time.Now(),
 	}
-	myReadClient, err := remote.NewReadClient(userAgent, myClientConfig)
 
-	var myLabelsList = make([]*prompb.LabelMatcher, 1)
-
-	myLabels := prompb.LabelMatcher{
-		Type:  0,
-		Name:  "__name__",
-		Value: "up",
-	}
-	myLabelsList[0] = &myLabels
-
-	myQuery := prompb.Query{
-		StartTimestampMs: 1598626000000,
-		EndTimestampMs:   1598626163000,
-		Matchers:         myLabelsList,
-	}
-	print(myQuery.String())
-	ctx := context.Background()
-	//out, err := c.Read(ctx, &myQuery)
-	//
-
-	req := &prompb.ReadRequest{
-		// TODO: Support batching multiple queries into one read request,
-		// as the protobuf interface allows for it.
-		Queries: []*prompb.Query{
-			&myQuery,
-		},
-	}
-	println(req.String())
-
+	rReadInput, err := NewRemoteReadInput(nil, in)
 	if err != nil {
-		print("error")
+		println(err.Error())
 	}
-
-	readResponse, err := myReadClient.Read(ctx, &myQuery)
-	println(readResponse.Timeseries)
+	readIter, err := rReadInput.Open(context.Background(), serParams)
 	if err != nil {
-		print("error: ", err.Error())
+		println(err.Error())
 	} else {
-		//println("Query Response: ", readResponse.String())
+		println(readIter.At().Labels().String())
+	}
+	for readIter.Next() {
+		println(readIter.At().Labels().String())
 	}
 }
