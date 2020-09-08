@@ -1,9 +1,8 @@
-package main
+package remoteread
 
 // TBD, help wanted!
 import (
 	"context"
-	"fmt"
 	"github.com/go-kit/kit/log"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
@@ -12,7 +11,6 @@ import (
 	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	"github.com/thanos-community/obslytics/pkg/input"
-	http_util "github.com/thanos-io/thanos/pkg/http"
 	"net/url"
 
 	"time"
@@ -60,7 +58,7 @@ func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (i
 		HTTPClientConfig: httpConfig,
 	}
 
-	client, err := remote.NewReadClient("name", clientConfig)
+	client, err := remote.NewReadClient("Obslytics/v0.1", clientConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -219,35 +217,4 @@ type ReadChunk struct {
 
 func (c ReadChunk) Iterator() ReadChunkIterator {
 	return ReadChunkIterator{Chunk: c, currentSampleIndex: 0, maxSampleIndex: len(c.series.Samples) - 1}
-}
-
-var userAgent = fmt.Sprintf("Obslytics/%s", 0.1)
-
-func main() {
-	in := input.InputConfig{
-		Endpoint:  "http://localhost:9090/api/v1/read",
-		TLSConfig: http_util.TLSConfig{},
-	}
-
-	minTime := time.Unix(time.Now().Unix()-1000*int64(time.Minute.Minutes()), 0)
-	//tenMinutes.Seconds()
-	serParams := input.SeriesParams{
-		Metric:  "go_gc_duration_seconds",
-		MinTime: minTime,
-		MaxTime: time.Now(),
-	}
-
-	rReadInput, err := NewRemoteReadInput(nil, in)
-	if err != nil {
-		println(err.Error())
-	}
-	readIter, err := rReadInput.Open(context.Background(), serParams)
-	if err != nil {
-		println(err.Error())
-	} else {
-		println(readIter.At().Labels().String())
-	}
-	for readIter.Next() {
-		println(readIter.At().Labels().String())
-	}
 }
