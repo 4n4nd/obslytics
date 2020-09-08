@@ -85,7 +85,6 @@ func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (i
 
 	var readSeriesList = make([]ReadSeries, 0, len(readResponse.Timeseries))
 
-	//var readSeriesList = []ReadSeries
 	// Convert Timeseries List to a Read Series List
 	for index := range readResponse.Timeseries {
 		readSeriesList = append(readSeriesList, ReadSeries{
