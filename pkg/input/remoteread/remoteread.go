@@ -80,25 +80,19 @@ func (i remoteReadInput) Open(ctx context.Context, params input.SeriesParams) (i
 		Matchers:         queryLabelList,
 	}
 
-	println("query: ", query.String())
 	readResponse, err := client.Read(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	println("len: ", len(readResponse.Timeseries))
-	println(readResponse.Timeseries[0].Labels[1].Value)
 
 	var readSeriesList = make([]ReadSeries, 0, len(readResponse.Timeseries))
 
 	//var readSeriesList = []ReadSeries
 	// Convert Timeseries List to a Read Series List
 	for index := range readResponse.Timeseries {
-		println("index: ", index)
 		readSeriesList = append(readSeriesList, ReadSeries{
 			timeseries: *readResponse.Timeseries[index],
 		})
-		println(readSeriesList[index].timeseries.Labels[2].Value)
-
 	}
 
 	return &readSeriesIterator{
@@ -133,7 +127,6 @@ func (i *readSeriesIterator) Next() bool {
 }
 
 func (i *readSeriesIterator) At() input.Series {
-	println("index: ", i.maxSeriesIndex)
 	return i.seriesList[i.currentSeriesIndex]
 }
 
